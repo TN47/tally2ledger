@@ -9,6 +9,10 @@ import "strings"
 import "github.com/prataprc/goparsec"
 
 type Voucher interface {
+	Type() string
+
+	Rewrite(rules map[string]interface{})
+
 	ToLedger() []string
 }
 
@@ -38,6 +42,7 @@ func formatfields(fields ...parsec.ParsecNode) string {
 
 type Receipt struct {
 	Date     time.Time
+	Payee    string
 	Debtor   string
 	Creditor string
 	Debit    float64
@@ -65,6 +70,25 @@ func NewReceipt(fields ...parsec.ParsecNode) (r *Receipt) {
 	return r
 }
 
+func (r *Receipt) Type() string {
+	return "Receipt"
+}
+
+func (r *Receipt) Rewrite(rules map[string]interface{}) {
+	for from, to := range rules["accountname"].(map[string]interface{}) {
+		if r.Debtor == from {
+			r.Debtor = to.(string)
+		} else if r.Creditor == from {
+			r.Creditor = to.(string)
+		}
+	}
+	for from, to := range rules["payee"].(map[string]interface{}) {
+		if r.Payee == from {
+			r.Payee = to.(string)
+		}
+	}
+}
+
 func (r *Receipt) ToLedger() []string {
 	tm := r.Date.Format("2006-01-02")
 	lines := []string{
@@ -81,6 +105,7 @@ func (r *Receipt) ToLedger() []string {
 
 type Journal struct {
 	Date     time.Time
+	Payee    string
 	Debtor   string
 	Creditor string
 	Debit    float64
@@ -111,6 +136,25 @@ func NewJournal(fields ...parsec.ParsecNode) (j *Journal) {
 	return j
 }
 
+func (j *Journal) Type() string {
+	return "Journal"
+}
+
+func (j *Journal) Rewrite(rules map[string]interface{}) {
+	for from, to := range rules["accountname"].(map[string]interface{}) {
+		if j.Debtor == from {
+			j.Debtor = to.(string)
+		} else if j.Creditor == from {
+			j.Creditor = to.(string)
+		}
+	}
+	for from, to := range rules["payee"].(map[string]interface{}) {
+		if j.Payee == from {
+			j.Payee = to.(string)
+		}
+	}
+}
+
 func (j *Journal) ToLedger() []string {
 	tm := j.Date.Format("2006-01-02")
 	lines := []string{
@@ -127,6 +171,7 @@ func (j *Journal) ToLedger() []string {
 
 type Payment struct {
 	Date     time.Time
+	Payee    string
 	Debtor   string
 	Creditor string
 	Debit    float64
@@ -154,6 +199,25 @@ func NewPayment(fields ...parsec.ParsecNode) (p *Payment) {
 	return p
 }
 
+func (p *Payment) Type() string {
+	return "Payment"
+}
+
+func (p *Payment) Rewrite(rules map[string]interface{}) {
+	for from, to := range rules["accountname"].(map[string]interface{}) {
+		if p.Debtor == from {
+			p.Debtor = to.(string)
+		} else if p.Creditor == from {
+			p.Creditor = to.(string)
+		}
+	}
+	for from, to := range rules["payee"].(map[string]interface{}) {
+		if p.Payee == from {
+			p.Payee = to.(string)
+		}
+	}
+}
+
 func (p *Payment) ToLedger() []string {
 	tm := p.Date.Format("2006-01-02")
 	lines := []string{
@@ -170,6 +234,7 @@ func (p *Payment) ToLedger() []string {
 
 type Contra struct {
 	Date     time.Time
+	Payee    string
 	Debtor   string
 	Creditor string
 	Debit    float64
@@ -195,6 +260,25 @@ func NewContra(fields ...parsec.ParsecNode) (c *Contra) {
 		parsed:   true,
 	}
 	return c
+}
+
+func (c *Contra) Type() string {
+	return "Contra"
+}
+
+func (c *Contra) Rewrite(rules map[string]interface{}) {
+	for from, to := range rules["accountname"].(map[string]interface{}) {
+		if c.Debtor == from {
+			c.Debtor = to.(string)
+		} else if c.Creditor == from {
+			c.Creditor = to.(string)
+		}
+	}
+	for from, to := range rules["payee"].(map[string]interface{}) {
+		if c.Payee == from {
+			c.Payee = to.(string)
+		}
+	}
 }
 
 func (c *Contra) ToLedger() []string {
