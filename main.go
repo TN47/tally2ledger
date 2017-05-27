@@ -57,7 +57,7 @@ func main() {
 		"log.level":      options.loglevel,
 		"log.file":       "",
 		"log.timeformat": "",
-		"log.prefix":     "[%v]",
+		"log.prefix":     "%v:",
 	}
 	log.SetLogger(nil, logsetts)
 
