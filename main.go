@@ -5,6 +5,7 @@ import "fmt"
 import "flag"
 import "sort"
 import "bytes"
+import "reflect"
 import "strings"
 import "io/ioutil"
 import "encoding/json"
@@ -122,7 +123,11 @@ func tallyvouchers(data []byte) ([]Voucher, error) {
 		if val, ok := term.(string); ok {
 			if strings.HasPrefix(val, "(No. :") {
 				fields = append(fields, term)
-				vouchers = append(vouchers, newvoucher(fields...))
+				voucher := newvoucher(fields...)
+				if voucher == nil || reflect.ValueOf(voucher).IsNil() {
+					return nil, fmt.Errorf("invalid voucher")
+				}
+				vouchers = append(vouchers, voucher)
 				fields = fields[:0]
 				continue
 			}

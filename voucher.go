@@ -7,6 +7,7 @@ import "strconv"
 import "strings"
 
 import "github.com/prataprc/goparsec"
+import "github.com/prataprc/golog"
 
 type Voucher interface {
 	Type() string
@@ -103,35 +104,57 @@ func (r *Receipt) ToLedger() []string {
 	return lines
 }
 
+var njournals int
+
 type Journal struct {
-	Date     time.Time
-	Payee    string
-	Debtor   string
-	Creditor string
-	Debit    float64
-	Credit   float64
-	Notes    []string
-	parsed   bool
+	Date      time.Time
+	Payee     string
+	Debtors   []string
+	Creditors []string
+	Debits    []float64
+	Credits   []float64
+	Notes     []string
+	parsed    bool
 }
 
 func NewJournal(fields ...parsec.ParsecNode) (j *Journal) {
-	notesorignore := []int{2, 3, 6, 7, 8, 11, 13, 15, 16, 19, 20, 21}
+	njournals++
+
 	if fields[4].(string) != "Jrnl" {
 		panic("impossible situation")
 	}
 
-	creditor := strings.Trim(fields[12].(string), " ")
-	if creditor == "" {
-		creditor = strings.Trim(fields[8].(string), " ")
+	// gather fields
+	date := parsetime(fields[0])
+	debtors := []string{strings.Trim(fields[1].(string), " ")}
+	debits := []float64{-parsefloat(fields[5])}
+	// credit offset
+	co, err := jrnlcreditoffset(fields)
+	if err != nil {
+		log.Errorf("%v\n", err)
+		return nil
 	}
+	creditors := []string{}
+	credits := []float64{}
+	for ; co+8 < len(fields); co += 8 {
+		creditor := strings.Trim(fields[co+1].(string), " ")
+		if creditor == "" {
+			fmsg := "%v creditor field %v is empty\n"
+			log.Errorf(fmsg, njournals, co+1)
+			return nil
+		}
+		creditors = append(creditors, creditor)
+		credits = append(credits, -parsefloat(fields[co+7]))
+		checknodes := []parsec.ParsecNode{fields[co+0]}
+		warncontent(append(checknodes, fields[co+2:co+7]...))
+	}
+	// gather notes
+	notes := getfnotes(fields[co:])
+
 	j = &Journal{
-		Date:     parsetime(fields[0]),
-		Debtor:   fields[1].(string),
-		Creditor: creditor,
-		Debit:    -parsefloat(fields[5]),
-		Credit:   parsefloat(fields[5]),
-		Notes:    getnotes(fields, notesorignore),
-		parsed:   true,
+		Date: date, Debtors: debtors, Creditors: creditors,
+		Debits: debits, Credits: credits, parsed: true,
+		Notes: notes,
 	}
 	return j
 }
@@ -142,10 +165,15 @@ func (j *Journal) Type() string {
 
 func (j *Journal) Rewrite(rules map[string]interface{}) {
 	for from, to := range rules["accountname"].(map[string]interface{}) {
-		if j.Debtor == from {
-			j.Debtor = to.(string)
-		} else if j.Creditor == from {
-			j.Creditor = to.(string)
+		for i, debtor := range j.Debtors {
+			if debtor == from {
+				j.Debtors[i] = to.(string)
+			}
+		}
+		for i, creditor := range j.Creditors {
+			if creditor == from {
+				j.Creditors[i] = to.(string)
+			}
 		}
 	}
 	for from, to := range rules["payee"].(map[string]interface{}) {
@@ -158,10 +186,15 @@ func (j *Journal) Rewrite(rules map[string]interface{}) {
 func (j *Journal) ToLedger() []string {
 	tm := j.Date.Format("2006-01-02")
 	lines := []string{
-		fmt.Sprintf("%v  %v", tm, "Payee"),
-		fmt.Sprintf("    %-40v  %.2f", j.Debtor, j.Debit),
-		fmt.Sprintf("    %-40v  %.2f", j.Creditor, j.Credit),
-		fmt.Sprintf("    ; Journal"),
+		fmt.Sprintf("%v  %v ; Journal", tm, "Payee"),
+	}
+	for i, debtor := range j.Debtors {
+		line := fmt.Sprintf("    %-40v  %.2f", debtor, j.Debits[i])
+		lines = append(lines, line)
+	}
+	for i, creditor := range j.Creditors {
+		line := fmt.Sprintf("    %-40v  %.2f", creditor, j.Credits[i])
+		lines = append(lines, line)
 	}
 	for _, note := range j.Notes {
 		lines = append(lines, fmt.Sprintf("    ; %v", note))
@@ -305,9 +338,18 @@ func getnotes(fields []parsec.ParsecNode, indexes []int) []string {
 			if s != "" {
 				notes = append(notes, s)
 			}
-			continue
-		} else if _, ok := fields[index].(parsec.MaybeNone); ok {
-			continue
+		}
+	}
+	return notes
+}
+
+func getfnotes(fields []parsec.ParsecNode) []string {
+	notes := []string{}
+	for _, field := range fields {
+		if s, ok := field.(string); ok {
+			if s != "" && strings.HasPrefix(s, "(No. ") == false {
+				notes = append(notes, s)
+			}
 		}
 	}
 	return notes
@@ -330,4 +372,41 @@ func parsetime(field parsec.ParsecNode) time.Time {
 	month, _ := strconv.Atoi(matches[2])
 	year, _ := strconv.Atoi(matches[3])
 	return time.Date(year, time.Month(month), date, 0, 0, 0, 0, time.Local)
+}
+
+func warncontent(fields []parsec.ParsecNode) {
+	for _, field := range fields {
+		if s, ok := field.(string); ok && strings.Trim(s, " ") == "" {
+			continue
+		} else if _, ok = field.(parsec.MaybeNone); ok {
+			continue
+		}
+		log.Warnf("unknown field %v\n", field)
+	}
+}
+
+func jrnlcreditoffset(fields []parsec.ParsecNode) (int, error) {
+	// credit offset based on based on size
+	var co int
+	switch len(fields) {
+	case 18:
+		co = 7
+	case 22, 30, 38, 46, 54, 62, 70:
+		// credit offset based on Cheque/DD
+		co = jrnlchequeordd(fields)
+	default:
+		fmsg := "%v number of journal fields == %v"
+		err := fmt.Errorf(fmsg, njournals, len(fields))
+		return 0, err
+	}
+	return co, nil
+}
+
+func jrnlchequeordd(fields []parsec.ParsecNode) int {
+	if s, ok := fields[7].(string); ok {
+		if strings.Contains(strings.ToLower(strings.Trim(s, " ")), "cheque") {
+			return 11
+		}
+	}
+	return 7
 }
