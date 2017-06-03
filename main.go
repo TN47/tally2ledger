@@ -67,7 +67,7 @@ func main() {
 		log.Errorf("%v\n", err)
 		os.Exit(1)
 	}
-	data = data[3:] // skip BOM
+	// TODO: not yet supported // data = data[3:] // skip BOM
 	data = bytes.Replace(data, []byte{0xd, 0xa}, []byte{}, -1)
 
 	// Parse tally vouchers
