@@ -71,13 +71,11 @@ func NewReceipt(fields ...parsec.ParsecNode) (r *Receipt) {
 	creditors, credits = append(creditors, creditor), append(credits, -credit)
 
 	// partition
-	dos, cos, err := dcpartition(fields)
+	offsets, err := dcpartition(fields)
 	if err != nil {
 		log.Errorf("%v dcpartition: %v\n", njournals, err)
 		return nil
 	}
-	offsets := dos
-	offsets = append(offsets, cos...)
 	//fmt.Println(nreceipts, offsets)
 	for _, off := range offsets {
 		name, amount, err := parseposting(fields[off:])
@@ -94,7 +92,7 @@ func NewReceipt(fields ...parsec.ParsecNode) (r *Receipt) {
 		}
 	}
 	// gather notes
-	notes := getfnotes(fields, dos, cos)
+	notes := getfnotes(fields, offsets)
 
 	r = &Receipt{
 		Date: date, Debtors: debtors, Creditors: creditors,
@@ -163,13 +161,11 @@ func NewJournal(fields ...parsec.ParsecNode) (j *Journal) {
 	debtors, debits = append(debtors, debtor), append(debits, -debit)
 
 	// partition
-	dos, cos, err := dcpartition(fields)
+	offsets, err := dcpartition(fields)
 	if err != nil {
 		log.Errorf("%v dcpartition: %v\n", njournals, err)
 		return nil
 	}
-	offsets := dos
-	offsets = append(offsets, cos...)
 	for _, off := range offsets {
 		name, amount, err := parseposting(fields[off:])
 		if err != nil {
@@ -185,7 +181,7 @@ func NewJournal(fields ...parsec.ParsecNode) (j *Journal) {
 		}
 	}
 	// gather notes
-	notes := getfnotes(fields, dos, cos)
+	notes := getfnotes(fields, offsets)
 
 	j = &Journal{
 		Date: date, Debtors: debtors, Creditors: creditors,
@@ -238,6 +234,8 @@ type Payment struct {
 }
 
 func NewPayment(fields ...parsec.ParsecNode) (p *Payment) {
+	npayments++
+
 	if fields[4].(string) != "Pymt" {
 		panic("impossible situation")
 	}
@@ -252,13 +250,12 @@ func NewPayment(fields ...parsec.ParsecNode) (p *Payment) {
 	debtors, debits = append(debtors, debtor), append(debits, -debit)
 
 	// partition
-	cos, dos, err := dcpartition(fields)
+	offsets, err := dcpartition(fields)
 	if err != nil {
 		log.Errorf("%v dcpartition: %v\n", npayments, err)
 		return nil
 	}
-	offsets := dos
-	offsets = append(offsets, cos...)
+	//fmt.Println(npayments, offsets)
 	for _, off := range offsets {
 		name, amount, err := parseposting(fields[off:])
 		if err != nil {
@@ -274,7 +271,7 @@ func NewPayment(fields ...parsec.ParsecNode) (p *Payment) {
 		}
 	}
 	// gather notes
-	notes := getfnotes(fields, cos, dos)
+	notes := getfnotes(fields, offsets)
 
 	p = &Payment{
 		Date: date, Debtors: debtors, Creditors: creditors,
@@ -343,13 +340,11 @@ func NewContra(fields ...parsec.ParsecNode) (c *Contra) {
 	creditors, credits = append(creditors, creditor), append(credits, -credit)
 
 	// partition
-	cos, dos, err := dcpartition(fields)
+	offsets, err := dcpartition(fields)
 	if err != nil {
 		log.Errorf("%v dcpartition: %v\n", ncontras, err)
 		return nil
 	}
-	offsets := dos
-	offsets = append(offsets, cos...)
 	for _, off := range offsets {
 		name, amount, err := parseposting(fields[off:])
 		if err != nil {
@@ -365,7 +360,7 @@ func NewContra(fields ...parsec.ParsecNode) (c *Contra) {
 		}
 	}
 	// gather notes
-	notes := getfnotes(fields, cos, dos)
+	notes := getfnotes(fields, offsets)
 
 	c = &Contra{
 		Date: date, Debtors: debtors, Creditors: creditors,
@@ -419,15 +414,10 @@ func getnotes(fields []parsec.ParsecNode, indexes []int) []string {
 	return notes
 }
 
-func getfnotes(fields []parsec.ParsecNode, xs, ys []int) []string {
-	var offset int
-	if len(ys) > 0 {
-		offset = len(ys)
-	} else if len(xs) > 0 {
-		offset = len(xs)
-	}
+func getfnotes(fields []parsec.ParsecNode, offsets []int) []string {
+	offset := len(offsets)
 	notes := []string{}
-	for _, field := range fields[offset:] {
+	for _, field := range fields[offset+8:] {
 		if s, ok := field.(string); ok {
 			if s != "" && strings.HasPrefix(s, "(No. ") == false {
 				notes = append(notes, s)
@@ -458,26 +448,30 @@ func warncontent(fields []parsec.ParsecNode) {
 	}
 }
 
-func dcpartition(fields []parsec.ParsecNode) ([]int, []int, error) {
-	part1, part2, idx := []int{}, []int{}, 7
-
-	for ; idx+8 < len(fields); idx += 8 {
-		if ischequedd(fields[idx]) {
+func dcpartition(fields []parsec.ParsecNode) ([]int, error) {
+	offsets := []int{}
+	for idx := 7; idx+8 < len(fields); {
+		if ischequeddcash(fields[idx]) {
 			idx += 4
-			break
+			continue
 		}
-		part1 = append(part1, idx)
+		offsets = append(offsets, idx)
+		idx += 8
 	}
-	for ; idx+8 < len(fields); idx += 8 {
-		part2 = append(part2, idx)
-	}
-	return part1, part2, nil
+	return offsets, nil
 }
 
-func ischequedd(field parsec.ParsecNode) bool {
+func ischequeddcash(field parsec.ParsecNode) bool {
+	markers := []string{
+		"Cash", "Cheque", "Cheque/DD", "Electronic DD/PO",
+		"Inter Bank Transfer",
+	}
 	if s, ok := field.(string); ok {
-		if strings.Contains(strings.ToLower(strings.Trim(s, " ")), "cheque") {
-			return true
+		token := strings.Trim(s, " ")
+		for _, marker := range markers {
+			if strings.Contains(token, marker) {
+				return true
+			}
 		}
 	}
 	return false

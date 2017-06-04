@@ -92,6 +92,33 @@ func main() {
 }
 
 func tallyvouchers(data []byte) ([]Voucher, error) {
+	nodes, err := parsedata(data)
+	if err != nil {
+		return nil, err
+	}
+
+	vouchers := []Voucher{}
+	fields := []parsec.ParsecNode{}
+	for _, term := range nodes {
+		if val, ok := term.(string); ok {
+			if strings.HasPrefix(val, "(No. :") {
+				fields = append(fields, term)
+				voucher := newvoucher(fields...)
+				if voucher == nil || reflect.ValueOf(voucher).IsNil() {
+					return nil, fmt.Errorf("invalid voucher")
+				}
+				vouchers = append(vouchers, voucher)
+				fields = fields[:0]
+				continue
+			}
+		}
+		fields = append(fields, term)
+	}
+	return vouchers, nil
+}
+
+func parsedata(data []byte) ([]parsec.ParsecNode, error) {
+	var err error
 	// parser combinators
 	ydate := parsec.Token("[0-9]{1,2}-[0-9]{1,2}-[0-9]{4}", "DATE")
 	yhackstr := parsec.And(
@@ -110,31 +137,48 @@ func tallyvouchers(data []byte) ([]Voucher, error) {
 		parsec.Maybe(maybenode, yterm), parsec.Token(`,`, "FIELDSEP"),
 	)
 
-	scanner := parsec.NewScanner(data)
-	nodes, scanner := y(scanner)
-	if scanner.Endof() == false {
-		err := fmt.Errorf("expected eof %v\n", scanner.GetCursor())
-		log.Errorf("%v\n", err)
-		return nil, err
+	nodes := []parsec.ParsecNode{}
+
+	buildandparse := func(data []byte) (parsec.ParsecNode, parsec.Scanner) {
+		data = bytes.Trim(data, "\n\r")
+		scanner := parsec.NewScanner(data)
+		return y(scanner)
 	}
-	vouchers := []Voucher{}
-	fields := []parsec.ParsecNode{}
-	for _, term := range nodes.([]parsec.ParsecNode) {
-		if val, ok := term.(string); ok {
-			if strings.HasPrefix(val, "(No. :") {
-				fields = append(fields, term)
-				voucher := newvoucher(fields...)
-				if voucher == nil || reflect.ValueOf(voucher).IsNil() {
-					return nil, fmt.Errorf("invalid voucher")
-				}
-				vouchers = append(vouchers, voucher)
-				fields = fields[:0]
-				continue
+
+	node, scanner := buildandparse(data)
+	ns := node.([]parsec.ParsecNode)
+	for scanner.Endof() == false {
+		cursor := scanner.GetCursor()
+		_, ok := ns[len(ns)-1].(string)
+		if ok && data[cursor] != ',' {
+			nodes = append(nodes, ns...)
+			log.Warnf("\" in string at %v\n", cursor)
+			data = append([]byte{'"'}, data[cursor:]...)
+			node, scanner = buildandparse(data)
+			ns = node.([]parsec.ParsecNode)
+			if nodes, ns, err = stitchstrnodes(nodes, ns); err != nil {
+				return nil, err
 			}
+		} else {
+			cursor := scanner.GetCursor()
+			rem := string(data[cursor:])
+			err := fmt.Errorf("expected eof %v %q\n", cursor, rem)
+			log.Errorf("%v\n", err)
+			return nil, err
 		}
-		fields = append(fields, term)
 	}
-	return vouchers, nil
+	nodes = append(nodes, ns...)
+	return nodes, nil
+}
+
+func stitchstrnodes(
+	nodes, ns []parsec.ParsecNode) (x, y []parsec.ParsecNode, err error) {
+
+	s1 := nodes[len(nodes)-1].(string)
+	s2 := ns[0].(string)
+	s := s1 + s2
+	nodes[len(nodes)-1] = s
+	return nodes, ns[1:], nil
 }
 
 func applyrules(vouchers []Voucher) error {
