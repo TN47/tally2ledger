@@ -7,7 +7,7 @@ import "strconv"
 import "strings"
 
 import "github.com/prataprc/goparsec"
-import "github.com/prataprc/golog"
+import "github.com/bnclabs/golog"
 
 type Voucher interface {
 	Type() string

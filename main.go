@@ -10,7 +10,7 @@ import "strings"
 import "io/ioutil"
 import "encoding/json"
 
-import "github.com/prataprc/golog"
+import "github.com/bnclabs/golog"
 import "github.com/prataprc/goparsec"
 
 var options struct {
